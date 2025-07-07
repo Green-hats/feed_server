@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>喂食记录监控系统</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>喂食记录监控系统</h1>
+
+        <div class="dashboard">
+            <div class="stats-card">
+                <h3>今日喂食</h3>
+                <div class="stat-value" id="today-count">0</div>
+            </div>
+
+            <div class="stats-card">
+                <h3>平均评分</h3>
+                <div class="stat-value" id="avg-rating">0.0</div>
+            </div>
+
+            <div class="stats-card">
+                <h3>最受欢迎食物</h3>
+                <div class="stat-value" id="popular-food">-</div>
+            </div>
+        </div>
+
+        <div class="filters">
+            <div class="filter-group">
+                <label>时间范围：</label>
+                <select id="time-range">
+                    <option value="1">今天</option>
+                    <option value="7" selected>最近7天</option>
+                    <option value="30">最近30天</option>
+                    <option value="365">全部</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>人员：</label>
+                <select id="person-filter">
+                    <option value="">全部</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>食物：</label>
+                <select id="food-filter">
+                    <option value="">全部</option>
+                </select>
+            </div>
+
+            <button id="apply-filters">应用筛选</button>
+        </div>
+
+        <div class="records-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>人员</th>
+                        <th>食物</th>
+                        <th>地点</th>
+                        <th>份量(g)</th>
+                        <th>备注</th>
+                        <th>评分</th>
+                    </tr>
+                </thead>
+                <tbody id="feedings-list"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', () => {
+            // 加载筛选选项
+            loadFilterOptions();
+
+            // 设置筛选按钮事件
+            document.getElementById('apply-filters').addEventListener('click', loadFeedings);
+
+            // 加载数据
+            loadFeedings();
+        });
+
+        // 加载筛选选项
+        async function loadFilterOptions() {
+            try {
+                const [persons, foods] = await Promise.all([
+                    fetch('/api/persons').then(res => res.json()),
+                    fetch('/api/foods').then(res => res.json())
+                ]);
+
+                populateFilter('person-filter', persons, 'person_id', 'name');
+                populateFilter('food-filter', foods, 'food_id', 'name');
+            } catch (err) {
+                console.error('加载筛选选项失败:', err);
+            }
+        }
+
+        // 填充筛选下拉框
+        function populateFilter(elementId, items, valueKey, textKey) {
+            const select = document.getElementById(elementId);
+
+            // 添加选项
+            items.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item[valueKey];
+                option.textContent = item[textKey];
+                select.appendChild(option);
+            });
+        }
+
+        // 加载喂食记录
+        async function loadFeedings() {
+            try {
+                const timeRange = document.getElementById('time-range').value;
+                const personId = document.getElementById('person-filter').value;
+                const foodId = document.getElementById('food-filter').value;
+
+                const response = await fetch('/api/feedings');
+                const feedings = await response.json();
+
+                // 应用筛选
+                const filteredFeedings = feedings.filter(feed => {
+                    // 时间筛选（简化处理）
+                    if (timeRange !== '365') {
+                        const days = parseInt(timeRange);
+                        const recordDate = new Date(feed.feeding_time);
+                        const today = new Date();
+                        const diffDays = Math.floor((today - recordDate) / (1000 * 60 * 60 * 24));
+
+                        if (diffDays > days) return false;
+                    }
+
+                    // 人员筛选
+                    if (personId && feed.person_id != personId) return false;
+
+                    // 食物筛选
+                    if (foodId && feed.food_id != foodId) return false;
+
+                    return true;
+                });
+
+                // 更新统计数据
+                updateStats(filteredFeedings);
+
+                // 更新表格
+                updateFeedingsTable(filteredFeedings);
+            } catch (err) {
+                console.error('加载喂食记录失败:', err);
+                alert('加载记录失败: ' + err.message);
+            }
+        }
+
+        // 更新统计数据
+        function updateStats(feedings) {
+            // 今日喂食次数
+            const today = new Date().toISOString().split('T')[0];
+            const todayCount = feedings.filter(feed => {
+                return feed.feeding_time.startsWith(today);
+            }).length;
+            document.getElementById('today-count').textContent = todayCount;
+
+            // 平均评分
+            const ratedFeedings = feedings.filter(feed => feed.score);
+            const avgRating = ratedFeedings.length > 0
+                ? (ratedFeedings.reduce((sum, feed) => sum + feed.score, 0) / ratedFeedings.length).toFixed(1)
+                : '0.0';
+            document.getElementById('avg-rating').textContent = avgRating;
+
+            // 最受欢迎食物
+            const foodCounts = {};
+            feedings.forEach(feed => {
+                if (feed.food_name) {
+                    foodCounts[feed.food_name] = (foodCounts[feed.food_name] || 0) + 1;
+                }
+            });
+
+            let popularFood = '-';
+            let maxCount = 0;
+            for (const [food, count] of Object.entries(foodCounts)) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    popularFood = food;
+                }
+            }
+            document.getElementById('popular-food').textContent = popularFood;
+        }
+
+        // 更新喂食记录表格
+        function updateFeedingsTable(feedings) {
+            const tbody = document.getElementById('feedings-list');
+            tbody.innerHTML = '';
+
+            if (feedings.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7">没有找到喂食记录</td></tr>';
+                return;
+            }
+
+            feedings.forEach(feed => {
+                const row = document.createElement('tr');
+
+                // 格式化日期
+                const date = new Date(feed.feeding_time);
+                const formattedDate = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+
+                // 评分显示
+                let ratingDisplay = '未评分';
+                if (feed.score) {
+                    ratingDisplay = '★'.repeat(feed.score) + '☆'.repeat(5 - feed.score);
+                    if (feed.satisfaction) {
+                        ratingDisplay += `<br><small>${feed.satisfaction}</small>`;
+                    }
+                }
+
+                row.innerHTML = `
+                    <td>${formattedDate}</td>
+                    <td>${feed.person_name}</td>
+                    <td>${feed.food_name}</td>
+                    <td>${feed.location_name}</td>
+                    <td>${feed.portion_size || '-'}</td>
+                    <td>${feed.notes || '无'}</td>
+                    <td>${ratingDisplay}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+    </script>
+</body>
+
+</html>

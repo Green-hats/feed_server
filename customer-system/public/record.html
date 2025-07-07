@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>喂食记录补录系统</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>喂食记录补录系统</h1>
+
+        <div class="tabs">
+            <button class="tab active" onclick="openTab('incomplete')">待补录记录</button>
+            <button class="tab" onclick="openTab('new')">添加新记录</button>
+        </div>
+
+        <!-- 待补录记录 -->
+        <div id="incomplete" class="tab-content active">
+            <div class="filters">
+                <label>筛选：
+                    <select id="filter-type" onchange="loadIncompleteRecords()">
+                        <option value="all">所有待补录</option>
+                        <option value="notes">缺少备注</option>
+                        <option value="rating">缺少评分</option>
+                    </select>
+                </label>
+            </div>
+
+            <div id="incomplete-list" class="records-list">
+                <!-- 待补录记录将在这里显示 -->
+            </div>
+        </div>
+
+        <!-- 添加新记录 -->
+        <div id="new" class="tab-content">
+            <form id="new-record-form">
+                <div class="form-group">
+                    <label for="new-person">人员：</label>
+                    <select id="new-person" required></select>
+                </div>
+
+                <div class="form-group">
+                    <label for="new-food">食物：</label>
+                    <select id="new-food" required></select>
+                </div>
+
+                <div class="form-group">
+                    <label for="new-location">地点：</label>
+                    <select id="new-location" required></select>
+                </div>
+
+                <div class="form-group">
+                    <label for="new-portion">份量(g)：</label>
+                    <input type="number" id="new-portion" min="1" max="1000" value="150">
+                </div>
+
+                <div class="form-group">
+                    <label for="new-notes">备注：</label>
+                    <textarea id="new-notes" rows="3" placeholder="喂食情况记录..."></textarea>
+                </div>
+
+                <button type="submit">添加记录</button>
+            </form>
+        </div>
+
+        <!-- 备注补录模态框 -->
+        <div id="notes-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('notes-modal')">&times;</span>
+                <h3>添加备注</h3>
+                <form id="notes-form">
+                    <input type="hidden" id="notes-record-id">
+                    <div class="form-group">
+                        <label for="notes-content">备注内容：</label>
+                        <textarea id="notes-content" rows="4" required placeholder="请输入备注内容..."></textarea>
+                    </div>
+                    <button type="submit">保存备注</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 评分补录模态框 -->
+        <div id="rating-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('rating-modal')">&times;</span>
+                <h3>添加满意度评分</h3>
+                <form id="rating-form">
+                    <input type="hidden" id="rating-record-id">
+                    <div class="rating-stars">
+                        <span onclick="setRating(1)">☆</span>
+                        <span onclick="setRating(2)">☆</span>
+                        <span onclick="setRating(3)">☆</span>
+                        <span onclick="setRating(4)">☆</span>
+                        <span onclick="setRating(5)">☆</span>
+                    </div>
+                    <input type="hidden" id="score" required>
+                    <div class="form-group">
+                        <label for="comment">评价：</label>
+                        <textarea id="comment" rows="3" placeholder="您的评价..."></textarea>
+                    </div>
+                    <button type="submit">提交评分</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 当前选中的记录ID
+        let currentRecordId = null;
+
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', () => {
+            // 加载下拉选项
+            fetchDropdownOptions();
+
+            // 设置表单提交事件
+            document.getElementById('notes-form').addEventListener('submit', saveNotes);
+            document.getElementById('rating-form').addEventListener('submit', saveRating);
+            document.getElementById('new-record-form').addEventListener('submit', addNewRecord);
+
+            // 加载待补录记录
+            loadIncompleteRecords();
+        });
+
+        // 从服务器获取下拉框选项
+        async function fetchDropdownOptions() {
+            try {
+                const [persons, foods, locations] = await Promise.all([
+                    fetch('/api/persons').then(res => res.json()),
+                    fetch('/api/foods').then(res => res.json()),
+                    fetch('/api/locations').then(res => res.json())
+                ]);
+
+                populateDropdown('new-person', persons, 'person_id', 'name');
+                populateDropdown('new-food', foods, 'food_id', 'name');
+                populateDropdown('new-location', locations, 'location_id', 'name');
+            } catch (err) {
+                console.error('加载选项失败:', err);
+                alert('加载选项失败，请刷新页面重试');
+            }
+        }
+
+        // 填充下拉框
+        function populateDropdown(elementId, items, valueKey, textKey) {
+            const select = document.getElementById(elementId);
+            select.innerHTML = '';
+
+            // 添加默认选项
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = `请选择${elementId.includes('person') ? '人员' : elementId.includes('food') ? '食物' : '地点'}`;
+            defaultOption.disabled = true;
+            defaultOption.selected = true;
+            select.appendChild(defaultOption);
+
+            // 添加选项
+            items.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item[valueKey];
+                option.textContent = item[textKey];
+                select.appendChild(option);
+            });
+        }
+
+        // 加载待补录记录
+        async function loadIncompleteRecords() {
+            try {
+                const filterType = document.getElementById('filter-type').value;
+                const response = await fetch(`/api/feedings/incomplete`);
+                const records = await response.json();
+
+                const container = document.getElementById('incomplete-list');
+                container.innerHTML = '';
+
+                if (records.length === 0) {
+                    container.innerHTML = '<div class="no-records">没有需要补录的记录</div>';
+                    return;
+                }
+
+                records.forEach(record => {
+                    const recordDiv = document.createElement('div');
+                    recordDiv.className = 'record-card';
+
+                    // 格式化日期
+                    const date = new Date(record.feeding_time);
+                    const formattedDate = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+
+                    recordDiv.innerHTML = `
+                        <div class="record-header">
+                            <div class="record-time">${formattedDate}</div>
+                            <div class="record-person">${record.person_name}</div>
+                        </div>
+                        <div class="record-details">
+                            <div class="record-food">食物: ${record.food_name}</div>
+                            <div class="record-location">地点: ${record.location_name}</div>
+                        </div>
+                        <div class="record-actions">
+                            <button class="btn btn-notes" onclick="openNotesModal(${record.record_id})">添加备注</button>
+                            <button class="btn btn-rating" onclick="openRatingModal(${record.record_id})">添加评分</button>
+                        </div>
+                    `;
+
+                    container.appendChild(recordDiv);
+                });
+            } catch (err) {
+                console.error('加载待补录记录失败:', err);
+                alert('加载记录失败: ' + err.message);
+            }
+        }
+
+        // 打开备注模态框
+        function openNotesModal(recordId) {
+            currentRecordId = recordId;
+            document.getElementById('notes-record-id').value = recordId;
+            document.getElementById('notes-modal').style.display = 'block';
+        }
+
+        // 打开评分模态框
+        function openRatingModal(recordId) {
+            currentRecordId = recordId;
+            document.getElementById('rating-record-id').value = recordId;
+            document.getElementById('rating-modal').style.display = 'block';
+            // 重置评分
+            setRating(0);
+        }
+
+        // 关闭模态框
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        // 设置评分
+        function setRating(score) {
+            document.getElementById('score').value = score;
+            const stars = document.querySelectorAll('#rating-modal .rating-stars span');
+            stars.forEach((star, index) => {
+                star.textContent = index < score ? '★' : '☆';
+            });
+        }
+
+        // 保存备注
+        async function saveNotes(e) {
+            e.preventDefault();
+
+            const notes = document.getElementById('notes-content').value;
+            const recordId = document.getElementById('notes-record-id').value;
+
+            try {
+                const response = await fetch(`/api/record/${recordId}/notes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ notes })
+                });
+
+                if (response.ok) {
+                    alert('备注添加成功！');
+                    closeModal('notes-modal');
+                    loadIncompleteRecords();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || '未知错误');
+                }
+            } catch (err) {
+                console.error('添加备注失败:', err);
+                alert('添加备注失败: ' + err.message);
+            }
+        }
+
+        // 保存评分
+        async function saveRating(e) {
+            e.preventDefault();
+
+            const score = document.getElementById('score').value;
+            const comment = document.getElementById('comment').value;
+            const recordId = document.getElementById('rating-record-id').value;
+
+            if (!score || score < 1) {
+                alert('请选择评分');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/record/${recordId}/rating`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ score, comment })
+                });
+
+                if (response.ok) {
+                    alert('评分添加成功！');
+                    closeModal('rating-modal');
+                    loadIncompleteRecords();
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || '未知错误');
+                }
+            } catch (err) {
+                console.error('添加评分失败:', err);
+                alert('添加评分失败: ' + err.message);
+            }
+        }
+
+        // 添加新记录
+        async function addNewRecord(e) {
+            e.preventDefault();
+
+            const personId = document.getElementById('new-person').value;
+            const foodId = document.getElementById('new-food').value;
+            const locationId = document.getElementById('new-location').value;
+            const portion = document.getElementById('new-portion').value;
+            const notes = document.getElementById('new-notes').value;
+
+            if (!personId || !foodId || !locationId) {
+                alert('请选择人员、食物和地点');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/feeding', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        person_id: personId,
+                        food_id: foodId,
+                        location_id: locationId,
+                        portion_size: portion,
+                        notes: notes
+                    })
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    alert('喂食记录添加成功！ID: ' + result.record_id);
+                    // 重置表单
+                    document.getElementById('new-record-form').reset();
+                    // 刷新待补录列表
+                    loadIncompleteRecords();
+                } else {
+                    throw new Error(result.error || '未知错误');
+                }
+            } catch (err) {
+                console.error('添加记录失败:', err);
+                alert('添加记录失败: ' + err.message);
+            }
+        }
+
+        // 切换标签页
+        function openTab(tabName) {
+            // 隐藏所有标签内容
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 移除所有标签的活动状态
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 显示选中的标签内容
+            document.getElementById(tabName).classList.add('active');
+
+            // 设置选中的标签为活动状态
+            event.currentTarget.classList.add('active');
+        }
+    </script>
+</body>
+
+</html>
