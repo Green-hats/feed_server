@@ -34,7 +34,7 @@ feed/
 ### 1. 安装依赖
 
 ```bash
-npm install express sqllite
+npm install express sqllite3
 ```
 
 ### 2. 初始化数据库
